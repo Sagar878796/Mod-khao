@@ -1,0 +1,84 @@
+name: JSON to M3U
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch JSON and convert
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          source = "https://lemajekaat.streamxlive.workers.dev/"
+
+          req = urllib.request.Request(
+              source,
+              headers={"User-Agent": "Mozilla/5.0"}
+          )
+
+          with urllib.request.urlopen(req, timeout=30) as response:
+              data = json.load(response)
+
+          if not isinstance(data, list):
+              raise Exception("JSON format is not a list")
+
+          output = ["#EXTM3U"]
+          count = 0
+
+          for item in data:
+              if not isinstance(item, dict):
+                  continue
+
+              # Only public/authorized HLS streams
+              url = item.get("url", "")
+              name = item.get("name", "Unknown")
+              category = item.get("category", "Other")
+              logo = item.get("logo", "")
+
+              # Exclude DRM, keys and cookie-protected entries
+              if any(k in item for k in (
+                  "key", "keyId", "all_keys", "cookie"
+              )):
+                  continue
+
+              # HLS only
+              if not url.lower().split("?")[0].endswith(".m3u8"):
+                  continue
+
+              output.append(
+                  f'#EXTINF:-1 tvg-logo="{logo}" '
+                  f'group-title="{category}",{name}'
+              )
+              output.append(url)
+              count += 1
+
+          with open("playlist.m3u", "w", encoding="utf-8") as f:
+              f.write("\n".join(output) + "\n")
+
+          print(f"Created playlist with {count} channels")
+          PY
+
+      - name: Commit playlist
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add playlist.m3u
+
+          git diff --cached --quiet || \
+            git commit -m "Update M3U playlist"
+
+          git push
