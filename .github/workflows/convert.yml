@@ -1,4 +1,4 @@
-name: JSON to M3U
+name: JSON to M3U Catalogue
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch JSON and convert
+      - name: Fetch JSON and create M3U catalogue
         run: |
           python3 - <<'PY'
           import json
@@ -30,55 +30,57 @@ jobs:
           )
 
           with urllib.request.urlopen(req, timeout=30) as response:
-              data = json.load(response)
+              data = json.loads(response.read().decode("utf-8"))
+
+          if isinstance(data, dict):
+              for key in ("channels", "data", "results"):
+                  if isinstance(data.get(key), list):
+                      data = data[key]
+                      break
 
           if not isinstance(data, list):
-              raise Exception("JSON format is not a list")
+              raise ValueError("Expected a JSON list of channels")
 
-          output = ["#EXTM3U"]
+          lines = ["#EXTM3U"]
           count = 0
 
           for item in data:
               if not isinstance(item, dict):
                   continue
 
-              # Only public/authorized HLS streams
-              url = item.get("url", "")
-              name = item.get("name", "Unknown")
-              category = item.get("category", "Other")
-              logo = item.get("logo", "")
+              channel_id = str(item.get("id", ""))
+              name = str(item.get("name", "Unknown"))
+              category = str(item.get("category", "Other"))
+              logo = str(item.get("logo", ""))
 
-              # Exclude DRM, keys and cookie-protected entries
-              if any(k in item for k in (
-                  "key", "keyId", "all_keys", "cookie"
-              )):
-                  continue
-
-              # HLS only
-              if not url.lower().split("?")[0].endswith(".m3u8"):
-                  continue
-
-              output.append(
-                  f'#EXTINF:-1 tvg-logo="{logo}" '
-                  f'group-title="{category}",{name}'
+              # Metadata only; do not export stream URLs or credentials.
+              lines.append(
+                  f'#EXTINF:-1 tvg-id="{channel_id}" '
+                  f'tvg-logo="{logo}" group-title="{category}",{name}'
               )
-              output.append(url)
+
               count += 1
 
-          with open("playlist.m3u", "w", encoding="utf-8") as f:
-              f.write("\n".join(output) + "\n")
+          if count == 0:
+              raise ValueError("No channel metadata found")
 
-          print(f"Created playlist with {count} channels")
+          with open("channels.m3u", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print(f"Created catalogue: {count} channels")
+
           PY
 
-      - name: Commit playlist
+      - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add playlist.m3u
+          git add channels.m3u
 
-          git diff --cached --quiet || \
-            git commit -m "Update M3U playlist"
-
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Update channel catalogue"
+            git push
+          fi
